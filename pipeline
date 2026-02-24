@@ -1,0 +1,57 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE = "evil08/test"
+        TAG = "${BUILD_NUMBER}"
+        SERVICE_NAME = "node-service" 
+    }
+
+    stages {
+
+        stage('Clone') {
+            steps {
+                git branch: 'main', url: 'https://github.com/hrushikeshulawekar/node-demo.git'
+            }
+        }
+
+        stage('Build Image') {
+            steps {
+                sh "docker build -t $IMAGE:$TAG ."
+            }
+        }
+
+       stage('Push Image') {
+           steps {
+               script {
+                   docker.withRegistry('https://registry.hub.docker.com', 'dockerhub-creds') {
+                       docker.image("evil08/cicd-project:${BUILD_NUMBER}").push()
+                   }
+               }
+           }
+       }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                sh """
+                kubectl apply -f /var/lib/jenkins/k8s/deployment.yaml
+                kubectl apply -f /var/lib/jenkins/k8s/service.yaml
+                kubectl apply -f /var/lib/jenkins/k8s/hpa.yaml
+                kubectl set image deployment/node-app \
+                node-app=$IMAGE:$TAG
+                """
+                // Wait for deployment rollout to complete
+                sh """
+                echo "Waiting for deployment rollout to finish..."
+                kubectl rollout status deployment/node-app
+                """
+                // Get NodePort and Node IP info
+                sh """
+                NODE_PORT=\$(kubectl get svc ${env.SERVICE_NAME} -o jsonpath='{.spec.ports[0].nodePort}')
+                NODE_IP=\$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+                echo "Service is available at http://\$NODE_IP:\$NODE_PORT"
+                """
+            }
+        }
+    }
+}
