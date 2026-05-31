@@ -1,70 +1,213 @@
-# Getting Started with Create React App
+# CI/CD Pipeline for Node.js Application using Jenkins, Docker, Kubernetes and HPA
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+## Project Overview
 
-## Available Scripts
+This project demonstrates a complete CI/CD pipeline for a Node.js/React application using:
 
-In the project directory, you can run:
+* GitHub
+* Jenkins
+* Docker
+* Docker Hub
+* Kubernetes (Minikube)
+* Horizontal Pod Autoscaler (HPA)
 
-### `npm start`
+The pipeline automatically builds, packages, publishes, and deploys the application whenever code changes are pushed to GitHub.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+---
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Architecture
 
-### `npm test`
+GitHub → Jenkins → Docker Build → Docker Hub → Kubernetes (Minikube) → HPA
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+---
 
-### `npm run build`
+## Prerequisites
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+Install the following components:
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+* Java 21
+* Jenkins
+* Git
+* Docker
+* Kubectl
+* Minikube
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Verify installation:
 
-### `npm run eject`
+```bash
+java -version
+docker --version
+kubectl version --client
+minikube version
+jenkins --version
+```
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+---
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+## Project Structure
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+```text
+project/
+│
+├── src/
+├── public/
+├── Dockerfile
+├── Jenkinsfile
+├── package.json
+│
+└── k8s/
+    ├── deployment.yaml
+    ├── service.yaml
+    └── hpa.yaml
+```
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+---
 
-## Learn More
+## Dockerfile
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+```dockerfile
+FROM node:18-alpine
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+WORKDIR /app
 
-### Code Splitting
+COPY package*.json ./
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+RUN npm install
 
-### Analyzing the Bundle Size
+COPY . .
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+EXPOSE 3000
 
-### Making a Progressive Web App
+CMD ["npm","start"]
+```
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+---
 
-### Advanced Configuration
+## Build Docker Image
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+```bash
+docker build -t node-app:test .
+```
 
-### Deployment
+Run locally:
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+```bash
+docker run -p 3000:3000 node-app:test
+```
 
-### `npm run build` fails to minify
+---
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+## Docker Hub Login
+
+```bash
+docker login
+```
+
+Push image:
+
+```bash
+docker tag node-app:test <dockerhub-username>/node-app:latest
+
+docker push <dockerhub-username>/node-app:latest
+```
+
+---
+
+## Kubernetes Deployment
+
+Apply manifests:
+
+```bash
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+kubectl apply -f k8s/hpa.yaml
+```
+
+Check resources:
+
+```bash
+kubectl get pods
+kubectl get svc
+kubectl get hpa
+```
+
+---
+
+## Jenkins Pipeline Stages
+
+1. Checkout source code from GitHub
+2. Build Docker image
+3. Authenticate with Docker Hub
+4. Push Docker image
+5. Deploy to Kubernetes
+6. Verify deployment
+
+Example stages:
+
+```text
+Checkout
+Build Docker Image
+Docker Login
+Push Docker Image
+Deploy to Kubernetes
+Verify Deployment
+```
+
+---
+
+## Horizontal Pod Autoscaler
+
+Enable metrics server:
+
+```bash
+minikube addons enable metrics-server
+```
+
+Check HPA:
+
+```bash
+kubectl get hpa
+```
+
+HPA automatically scales application pods based on CPU utilization.
+
+---
+
+## Verification
+
+```bash
+kubectl get pods
+kubectl get deployments
+kubectl get services
+kubectl get hpa
+```
+
+Access application:
+
+```bash
+minikube service <service-name>
+```
+
+---
+
+## CI/CD Workflow
+
+1. Developer pushes code to GitHub.
+2. Jenkins pipeline starts automatically.
+3. Docker image is built.
+4. Image is pushed to Docker Hub.
+5. Kubernetes deployment is updated.
+6. Application pods are recreated with the latest image.
+7. HPA monitors CPU usage and scales pods automatically.
+
+---
+
+## Expected Outcome
+
+A fully automated CI/CD pipeline that:
+
+* Builds application automatically
+* Creates Docker images
+* Pushes images to Docker Hub
+* Deploys to Kubernetes
+* Supports automatic horizontal scaling through HPA
