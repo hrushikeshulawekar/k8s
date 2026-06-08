@@ -2,56 +2,177 @@ pipeline {
     agent any
 
     environment {
-        IMAGE = "evil08/cicd-project"
-        TAG = "${BUILD_NUMBER}"
-        SERVICE_NAME = "node-service" 
+        IMAGE         = "evil08/test"
+        TAG           = "${BUILD_NUMBER}"
+        SERVICE_NAME  = "node-service"
+        DEPLOYMENT    = "node-app"
+        CONTAINER     = "node-app"
+        NAMESPACE     = "default"
+        K8S_DIR       = "/var/lib/jenkins/k8s"
+        TIMEOUT       = "300s"
+    }
+
+    options {
+        timeout(time: 20, unit: 'MINUTES')   // kill runaway builds
+        disableConcurrentBuilds()            // prevent parallel deploy conflicts
+        buildDiscarder(logRotator(numToKeepStr: '10'))
     }
 
     stages {
 
+        // ── 1. Clone ────────────────────────────────────────────────────────
         stage('Clone') {
             steps {
+                echo "📥 Cloning repository..."
                 git branch: 'main', url: 'https://github.com/hrushikeshulawekar/node-demo.git'
             }
         }
 
+        // ── 2. Build Docker Image ───────────────────────────────────────────
         stage('Build Image') {
             steps {
-                sh "docker build -t $IMAGE:$TAG ."
+                echo "🔨 Building Docker image ${IMAGE}:${TAG}..."
+                sh "docker build -t ${IMAGE}:${TAG} ."
             }
         }
 
-       stage('Push Image') {
-           steps {
-               script {
-                   docker.withRegistry('https://registry.hub.docker.com', 'dockerhub-creds') {
-                       docker.image("evil08/cicd-project:${BUILD_NUMBER}").push()
-                   }
-               }
-           }
-       }
+        // ── 3. Push Docker Image ────────────────────────────────────────────
+        stage('Push Image') {
+            steps {
+                echo "📤 Pushing image to Docker Hub..."
+                script {
+                    docker.withRegistry('https://registry.hub.docker.com', 'dockerhub-creds') {
+                        docker.image("${IMAGE}:${TAG}").push()
+                        // Also tag as latest
+                        docker.image("${IMAGE}:${TAG}").push('latest')
+                    }
+                }
+            }
+        }
 
+        // ── 4. Deploy to Kubernetes ─────────────────────────────────────────
         stage('Deploy to Kubernetes') {
             steps {
-                sh """
-                kubectl apply -f /var/lib/jenkins/k8s/deployment.yaml
-                kubectl apply -f /var/lib/jenkins/k8s/service.yaml
-                kubectl apply -f /var/lib/jenkins/k8s/hpa.yaml
-                kubectl set image deployment/node-app \
-                node-app=$IMAGE:$TAG
-                """
-                // Wait for deployment rollout to complete
-                sh """
-                echo "Waiting for deployment rollout to finish..."
-                kubectl rollout status deployment/node-app
-                """
-                // Get NodePort and Node IP info
-                sh """
-                NODE_PORT=\$(kubectl get svc ${env.SERVICE_NAME} -o jsonpath='{.spec.ports[0].nodePort}')
-                NODE_IP=\$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-                echo "Service is available at http://\$NODE_IP:\$NODE_PORT"
-                """
+                script {
+
+                    // ── 4a. Check kubectl connectivity ──────────────────────
+                    echo "🔍 Verifying kubectl access..."
+                    def kubectlCheck = sh(
+                        script: "kubectl get nodes --request-timeout=10s",
+                        returnStatus: true
+                    )
+                    if (kubectlCheck != 0) {
+                        error("❌ kubectl cannot reach the cluster. Check kubeconfig/RBAC permissions.")
+                    }
+
+                    // ── 4b. Capture current revision BEFORE deploying ───────
+                    def currentRevision = sh(
+                        script: """
+                            kubectl get deployment/${env.DEPLOYMENT} \
+                                -n ${env.NAMESPACE} \
+                                -o jsonpath='{.metadata.annotations.deployment\\.kubernetes\\.io/revision}' \
+                                2>/dev/null || echo '0'
+                        """,
+                        returnStdout: true
+                    ).trim().toInteger()
+
+                    echo "📌 Current deployment revision: ${currentRevision}"
+
+                    // ── 4c. Apply manifests ─────────────────────────────────
+                    echo "📦 Applying Kubernetes manifests..."
+                    sh """
+                        kubectl apply -f ${env.K8S_DIR}/deployment.yaml -n ${env.NAMESPACE}
+                        kubectl apply -f ${env.K8S_DIR}/service.yaml     -n ${env.NAMESPACE}
+                        kubectl apply -f ${env.K8S_DIR}/hpa.yaml         -n ${env.NAMESPACE}
+                    """
+
+                    // ── 4d. Update container image ──────────────────────────
+                    echo "🖼️  Setting new image: ${IMAGE}:${TAG}..."
+                    sh """
+                        kubectl set image deployment/${env.DEPLOYMENT} \
+                            ${env.CONTAINER}=${IMAGE}:${TAG} \
+                            -n ${env.NAMESPACE}
+                    """
+
+                    // ── 4e. Wait for rollout ────────────────────────────────
+                    echo "⏳ Waiting for rollout to complete (timeout: ${env.TIMEOUT})..."
+                    def rolloutStatus = sh(
+                        script: """
+                            kubectl rollout status deployment/${env.DEPLOYMENT} \
+                                -n ${env.NAMESPACE} \
+                                --timeout=${env.TIMEOUT}
+                        """,
+                        returnStatus: true
+                    )
+
+                    // ── 4f. Handle rollout failure ──────────────────────────
+                    if (rolloutStatus != 0) {
+                        echo "⚠️  Rollout failed! Attempting rollback..."
+
+                        if (currentRevision > 0) {
+                            def undoStatus = sh(
+                                script: """
+                                    kubectl rollout undo deployment/${env.DEPLOYMENT} \
+                                        -n ${env.NAMESPACE}
+                                """,
+                                returnStatus: true
+                            )
+
+                            if (undoStatus == 0) {
+                                // Wait to confirm rollback itself succeeded
+                                def rollbackWait = sh(
+                                    script: """
+                                        kubectl rollout status deployment/${env.DEPLOYMENT} \
+                                            -n ${env.NAMESPACE} \
+                                            --timeout=${env.TIMEOUT}
+                                    """,
+                                    returnStatus: true
+                                )
+
+                                if (rollbackWait == 0) {
+                                    error("❌ Deployment FAILED. Successfully rolled back to revision ${currentRevision}.")
+                                } else {
+                                    error("❌ Deployment FAILED and rollback also failed! Manual intervention required.")
+                                }
+                            } else {
+                                error("❌ Deployment FAILED and rollback command itself errored! Manual intervention required.")
+                            }
+
+                        } else {
+                            error("❌ First deployment FAILED. No previous revision exists to roll back to. Manual fix required.")
+                        }
+                    }
+
+                    // ── 4g. Print service endpoint ──────────────────────────
+                    echo "✅ Deployment successful!"
+                    sh """
+                        NODE_PORT=\$(kubectl get svc ${env.SERVICE_NAME} \
+                            -n ${env.NAMESPACE} \
+                            -o jsonpath='{.spec.ports[0].nodePort}')
+                        NODE_IP=\$(kubectl get nodes \
+                            -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+                        echo "🌐 Service is available at http://\$NODE_IP:\$NODE_PORT"
+                    """
+                }
             }
+        }
+    }
+
+    // ── Post-pipeline notifications ─────────────────────────────────────────
+    post {
+
+        success {
+            echo "✅ Pipeline completed successfully! Image: ${IMAGE}:${TAG}"
+        }
+
+        failure {
+            echo "❌ Pipeline failed at stage. Check logs above for details."
+        }
+
+        always {
+            // Clean up local Docker image to save disk space on Jenkins agent
+            sh "docker rmi ${IMAGE}:${TAG} || true"
+            echo "🧹 Cleaned up local Docker image."
         }
     }
 }
