@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        IMAGE = "evil08/test"
+        IMAGE = "evil08/cicd-project"
         TAG = "${BUILD_NUMBER}"
         SERVICE_NAME = "node-service" 
     }
