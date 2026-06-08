@@ -4,7 +4,7 @@ metadata:
   name: node-app
 spec:
   replicas: 2
-  progressDeadlineSeconds: 60
+  progressDeadlineSeconds: 300
   strategy:
     type: RollingUpdate
     rollingUpdate:
