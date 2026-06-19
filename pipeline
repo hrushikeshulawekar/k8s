@@ -73,20 +73,23 @@ pipeline {
 
                     echo "📌 Current deployment revision: ${currentRevision}"
 
+                    echo "🖼️ Templating image tag ${IMAGE}:${TAG} into deployment.yaml..."
+
+                    // Patch the image tag into a throwaway copy of the manifest so the
+                    // committed deployment.yaml (with :latest) never has to be edited,
+                    // and so this single 'apply' is the ONLY mutation per deploy —
+                    // keeping the Deployment's revision history one-to-one with builds.
+                    sh """
+                        sed -E "s#image: ${IMAGE}:.*#image: ${IMAGE}:${TAG}#" \
+                            ${env.K8S_DIR}/deployment.yaml > /tmp/deployment-${TAG}.yaml
+                    """
+
                     echo "📦 Applying Kubernetes manifests..."
 
                     sh """
-                        kubectl apply -f ${env.K8S_DIR}/deployment.yaml -n ${env.NAMESPACE}
+                        kubectl apply -f /tmp/deployment-${TAG}.yaml -n ${env.NAMESPACE}
                         kubectl apply -f ${env.K8S_DIR}/service.yaml -n ${env.NAMESPACE}
                         kubectl apply -f ${env.K8S_DIR}/hpa.yaml -n ${env.NAMESPACE}
-                    """
-
-                    echo "🖼️ Setting new image: ${IMAGE}:${TAG}..."
-
-                    sh """
-                        kubectl set image deployment/${env.DEPLOYMENT} \
-                            ${env.CONTAINER}=${IMAGE}:${TAG} \
-                            -n ${env.NAMESPACE}
                     """
 
                     echo "⏳ Waiting for rollout to complete (timeout: ${env.TIMEOUT})..."
@@ -199,7 +202,8 @@ Manual intervention required.
 
         always {
             sh "docker rmi ${IMAGE}:${TAG} || true"
-            echo "🧹 Cleaned up local Docker image."
+            sh "rm -f /tmp/deployment-${TAG}.yaml || true"
+            echo "🧹 Cleaned up local Docker image and temp manifest."
         }
     }
 }
