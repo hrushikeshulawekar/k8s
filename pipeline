@@ -2,13 +2,13 @@ pipeline {
     agent any
 
     environment {
-        IMAGE         = "evil08/cicd-project"
+        IMAGE         = "evil08/testx"
         TAG           = "${BUILD_NUMBER}"
         SERVICE_NAME  = "node-service"
         DEPLOYMENT    = "node-app"
         CONTAINER     = "node-app"
-        NAMESPACE     = "default"
-        K8S_DIR       = "/var/lib/jenkins/k8s"
+        NAMESPACE     = "testx"
+        K8S_DIR       = "/var/lib/jenkins/testx"
         TIMEOUT       = "300s"
     }
 
@@ -23,7 +23,7 @@ pipeline {
         stage('Clone') {
             steps {
                 echo "📥 Cloning repository..."
-                git branch: 'main', url: 'https://github.com/hrushikeshulawekar/node-demo.git'
+                git branch: 'main', url: 'https://github.com/hrushikeshulawekar/taskx.git'
             }
         }
 
