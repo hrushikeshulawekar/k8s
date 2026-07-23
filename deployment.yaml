@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
         - name: node-app
-          image: evil08/cicd-project:latest
+          image: evil08/testx:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
